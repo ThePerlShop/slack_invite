@@ -12,6 +12,9 @@ use 5.018;
 use strict;
 use warnings;
 
+use utf8;
+use open qw(:std :utf8);
+
 use parent 't::feature::Test::Class';
 
 use Test::Most;
@@ -86,22 +89,30 @@ sub test_basic_invite : Test(6) {
 
     # In the following form data, we include some HTML special
     # characters (like < and >) to make sure they're properly escaped at
-    # the appropriate times. Even though the target code supports UTF-8,
-    # Plack::Test (and perhaps Plack itself) does not. (Oops.) So we do
-    # not test UTF-8 cleanliness here.
+    # the appropriate times. We also include non-ASCII character to make
+    # sure UTF-8 is passed through cleanly.
     Readonly::Hash my %form_data => (
         email => 'user@company.com',
-        first_name => 'Joe',
+        first_name => 'Joë', # Check for UTF-8 cleanliness.
         last_name => '<User>', # Check HTML escaping.
     );
 
     my $client = Plack::Test->create( $test->{app} );
 
 
+    # We have to manually encode the form data and construct the
+    # request, because URI::query_form() (used by POST() to
+    # automatically encode the form) doesn't handle UTF-8 correctly.
+    my $req = POST('http://mysite.company.com/invite');
+    $req->content_type('application/x-www-form-urlencoded');
+    my $form_encoded = join '&',
+        map { uri_escape($_) . '=' . uri_escape($form_data{$_}) } keys %form_data;
+    $req->content($form_encoded);
+    $req->content_length(length($form_encoded));
+
+
     # Run the code under test.
-    my $response = $client->request(
-        POST('http://mysite.company.com/invite', \%form_data),
-    );
+    my $response = $client->request($req);
 
 
     cmp_deeply(
@@ -148,12 +159,12 @@ sub test_basic_invite : Test(6) {
         methods(
             code => 200,
             [ header => 'Content-Type' ] => 'text/html',
-            content => 'SUCCESS! Joe &lt;User&gt; user@company.com',
+            content => 'SUCCESS! Joë &lt;User&gt; user@company.com',
         ),
         'response as expected'
     ) or note(Data::Dumper->Dump([$response], ['response']));
 
-    my $log_data = $log_file->slurp();
+    my $log_data = $log_file->slurp_utf8();
     my $timestamp = re(qr{\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}});
     cmp_deeply(
         [ map { [ split("\t", $_, 4) ] } split("\n", $log_data) ],
