@@ -156,14 +156,13 @@ sub test_bad_json : Test(2) {
     );
 
     my $expected_error = 'malformed JSON string, neither array, object,'
-      . ' number, string or atom, at character offset 0 (before "NOT JSON").';
+      . ' number, string or atom, at character offset 0 (before "NOT JSON")';
 
     cmp_deeply(
         $response,
         methods(
             code => 500,
-            [ header => 'Content-Type' ] => 'text/html',
-            content => 'ERROR! Joe User user@company.com ' . encode_entities($expected_error),
+            content => re(qr{\Q$expected_error\E}),
         ),
         'response as expected'
     ) or note(Data::Dumper->Dump([$response], ['response']));
@@ -201,14 +200,13 @@ sub test_not_a_json_object : Test(2) {
         POST('http://mysite.company.com/invite', $form_data),
     );
 
-    my $expected_error = 'API call did not return a JSON object.';
+    my $expected_error = 'API call did not return a JSON object';
 
     cmp_deeply(
         $response,
         methods(
             code => 500,
-            [ header => 'Content-Type' ] => 'text/html',
-            content => 'ERROR! Joe User user@company.com ' . encode_entities($expected_error),
+            content => re(qr{\Q$expected_error\E}),
         ),
         'response as expected'
     ) or note(Data::Dumper->Dump([$response], ['response']));

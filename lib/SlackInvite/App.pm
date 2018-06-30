@@ -195,13 +195,11 @@ sub _success {
 
 sub _error {
     my $class = shift;
-    my ($params, $error, $code) = @_;
+    my ($params, $error) = @_;
 
     my $config = $class->_config;
 
-    $code //= 200;
-
-    $class->_log($code, $error, $params);
+    $class->_log(200, $error, $params);
 
     my $html = Template::Mustache->render(
         $config->{error_html},
@@ -209,10 +207,53 @@ sub _error {
     );
 
     return [
-        $code,
+        200,
         [ 'Content-Type' => 'text/html' ],
         [$html],
     ];
+}
+
+
+# Returns error message if user error occurred. Otherwise, returns
+# nothing. May die if an API error occurs.
+sub _process_api_result {
+    my $class = shift;
+    my ($api_res) = @_;
+
+    my $api_res_json = $api_res->content;
+    my $api_res_data = decode_json($api_res_json);
+
+    die "API call did not return a JSON object"
+        unless ref $api_res_data eq 'HASH';
+
+    return $api_res_data->{error} if not $api_res_data->{ok};
+
+    return ();
+}
+
+
+sub _send_slack_invite {
+    my $class = shift;
+    my ($params) = @_;
+
+    my $ua = $class->_new_user_agent();
+    my $config = $class->_config;
+
+    my $api_res = $ua->post( $slack_api_url => {
+        token => $config->{slack_api_token},
+        channels => $config->{slack_channels},
+
+        email => $params->{email},
+        first_name => $params->{first_name},
+        last_name => $params->{last_name},
+
+        resend => 'true',
+    } );
+
+    my $error = $class->_process_api_result($api_res);
+
+    return $class->_error($params, $error) if $error;
+    return $class->_success($params);
 }
 
 
@@ -223,34 +264,20 @@ sub run_psgi {
     my $req = Plack::Request->new($env);
     my %params = %{ $req->parameters };
 
-    my $ua = $class->_new_user_agent();
-    my $config = $class->_config;
-
-    my $api_res = $ua->post( $slack_api_url => {
-        token => $config->{slack_api_token},
-        channels => $config->{slack_channels},
-
-        email => $params{email},
-        first_name => $params{first_name},
-        last_name => $params{last_name},
-
-        resend => 'true',
-    } );
-
-    my $api_res_json = $api_res->content;
-    my $api_res_data = eval {
-        my $decoded = decode_json($api_res_json);
-        die "API call did not return a JSON object" unless ref $decoded eq 'HASH';
-        $decoded;
+    my $res = eval {
+        $class->_send_slack_invite(\%params);
     };
+
+    # Log internal errors before finally dying.
     if ($@) {
-        my ($error) = split("\n", $@);
-        $error =~ s/ at \S+ line \d+//;
-        return $class->_error(\%params, $error, 500);
+        my $raw_error = $@;
+
+        my ($error) = split("\n", "$raw_error");
+        $error =~ s/ at \S+ line \d+.*$//;
+        $class->_log(500, $error, \%params);
+
+        die $raw_error;
     }
 
-    return $class->_error(\%params, $api_res_data->{error})
-        if not $api_res_data->{ok};
-
-    return $class->_success(\%params);
+    return $res;
 };
